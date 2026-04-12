@@ -26,13 +26,10 @@ jobs:
           cache: "pip"
 
       - name: 의존성 설치
-        run: |
-          cd tenbagger
-          pip install -r requirements.txt
+        run: pip install -r requirements.txt
 
       - name: 데이터 수집
         run: |
-          cd tenbagger
           python collect.py \
             --min-cap 500 \
             --workers 6 \
@@ -44,7 +41,7 @@ jobs:
         run: |
           git config user.name  "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
-          git add tenbagger/data/scores.csv
+          git add data/scores.csv
           git diff --cached --quiet || \
             git commit -m "data: 텐배거 스코어 업데이트 $(date +'%Y-%m-%d %H:%M KST' -d '+9 hours')"
           git push
