@@ -20,6 +20,12 @@ from typing import Optional
 import pandas as pd
 from pykrx import stock
 
+try:
+    import FinanceDataReader as fdr
+    _FDR_AVAILABLE = True
+except ImportError:
+    _FDR_AVAILABLE = False
+
 logger = logging.getLogger(__name__)
 
 
@@ -297,14 +303,73 @@ def get_current_pbr(ticker: str) -> Optional[float]:
 # ──────────────────────────────────────────────
 
 def _fetch_cap_df(date_str: str, market: str):
-    """시가총액 DataFrame 조회. 실패하면 None 반환."""
+    """시가총액 DataFrame 조회. 실패하면 None 반환.
+    
+    KRX 전종목시세 API는 장 개시 전/주말에 응답을 반환하지 않음.
+    """
     try:
         df = stock.get_market_cap_by_ticker(date_str, market)
-        if df is not None and not df.empty and "시가총액" in df.columns:
+        if df is not None and not df.empty and "시가총액" in df.columns and len(df) > 10:
             return df
         return None
     except Exception:
         return None
+
+
+def _get_tickers_via_fdr(min_cap_억: float) -> list[dict]:
+    """FinanceDataReader 를 이용한 종목 리스트 수집 (주말/장외에도 작동).
+    
+    pykrx 전종목시세 API 실패 시 폴백으로 사용.
+    """
+    if not _FDR_AVAILABLE:
+        return []
+    try:
+        krx = fdr.StockListing("KRX")
+        # 컬럼 정규화
+        col_map = {
+            "Code": "ticker", "Symbol": "ticker",
+            "Name": "name",
+            "Market": "market", "MarketId": "market",
+            "Marcap": "market_cap",
+            "Industry": "sector", "Sector": "sector",
+        }
+        krx = krx.rename(columns={k: v for k, v in col_map.items() if k in krx.columns})
+
+        required = {"ticker", "name"}
+        if not required.issubset(krx.columns):
+            return []
+
+        # 시장 구분 (KOSPI / KOSDAQ)
+        if "market" not in krx.columns:
+            krx["market"] = "KOSPI"
+
+        # 시가총액 (억원)
+        if "market_cap" in krx.columns:
+            # FDR Marcap 단위가 원(KRW)일 경우 억원으로 변환
+            sample = krx["market_cap"].dropna().iloc[0] if not krx["market_cap"].dropna().empty else 0
+            if sample > 1e10:  # 원 단위 -> 억원
+                krx["market_cap"] = krx["market_cap"] / 1e8
+            krx = krx[krx["market_cap"] >= min_cap_억]
+        else:
+            krx["market_cap"] = 0.0
+
+        if "sector" not in krx.columns:
+            krx["sector"] = ""
+
+        result = []
+        for _, row in krx.iterrows():
+            result.append({
+                "ticker":     str(row["ticker"]).zfill(6),
+                "name":       str(row["name"]),
+                "market":     str(row.get("market", "KOSPI")),
+                "market_cap": float(row.get("market_cap", 0)),
+                "sector":     str(row.get("sector", "")),
+                "pbr":        None,
+            })
+        return result
+    except Exception as e:
+        logger.warning(f"FDR 종목 수집 실패: {e}")
+        return []
 
 
 def get_all_tickers(min_cap_억: float = 500) -> list[dict]:
@@ -379,5 +444,12 @@ def get_all_tickers(min_cap_억: float = 500) -> list[dict]:
 
         except Exception as e:
             logger.error(f"[{market}] get_all_tickers: {e}")
+
+    # pykrx 전종목시세 API 실패(주말/장전) 시 FDR 폴백
+    if not result:
+        logger.info("pykrx 수집 실패 - FinanceDataReader 폴백 시도")
+        result = _get_tickers_via_fdr(min_cap_억)
+        if result:
+            logger.info(f"FDR 폴백 성공: {len(result)}개 종목")
 
     return result
