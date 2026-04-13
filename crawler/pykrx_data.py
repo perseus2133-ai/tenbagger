@@ -38,6 +38,34 @@ def _trading_window(days_back: int) -> tuple[str, str]:
     return _date_str(start), _date_str(end)
 
 
+
+_cached_trading_date = None
+
+
+def _last_trading_date():
+    """가장 최근 거래일 날짜 반환 (주말/공휴일 자동 처리)"""
+    global _cached_trading_date
+    if _cached_trading_date:
+        return _cached_trading_date
+    d = datetime.today()
+    for _ in range(10):
+        if d.weekday() < 5:
+            candidate = d.strftime("%Y%m%d")
+            try:
+                df = stock.get_market_cap_by_ticker(candidate, "KOSPI")
+                if df is not None and not df.empty:
+                    _cached_trading_date = candidate
+                    return candidate
+            except Exception:
+                pass
+        d -= timedelta(days=1)
+    d = datetime.today()
+    while d.weekday() >= 5:
+        d -= timedelta(days=1)
+    _cached_trading_date = d.strftime("%Y%m%d")
+    return _cached_trading_date
+
+
 def _last_n_trading_days(df: pd.DataFrame, n: int) -> pd.DataFrame:
     """거래량 > 0 행만 걸러 마지막 n거래일 반환"""
     valid = df[df.get("거래량", df.iloc[:, 0]) > 0] if "거래량" in df.columns else df
@@ -180,7 +208,7 @@ def get_sector_flow_intensity(ticker: str) -> Optional[float]:
           상위 몇 % 인지를 0~10으로 정규화
     """
     try:
-        today = datetime.today().strftime("%Y%m%d")
+        today = _last_trading_date()
         market = _guess_market(ticker)
 
         # 업종명 조회
@@ -210,7 +238,7 @@ def get_sector_flow_intensity(ticker: str) -> Optional[float]:
 
 def _get_sector_name(ticker: str, market: str) -> Optional[str]:
     try:
-        df = stock.get_market_sector_classifications(datetime.today().strftime("%Y%m%d"), market)
+        df = stock.get_market_sector_classifications(_last_trading_date(), market)
         if df is not None and ticker in df.index:
             return str(df.loc[ticker, "업종명"])
         return None
@@ -225,7 +253,7 @@ def _get_sector_name(ticker: str, market: str) -> Optional[str]:
 def get_market_cap(ticker: str) -> Optional[float]:
     """시가총액 (억원)"""
     try:
-        today = datetime.today().strftime("%Y%m%d")
+        today = _last_trading_date()
         market = _guess_market(ticker)
         df = stock.get_market_fundamental_by_ticker(today, market)
         if df is None or ticker not in df.index:
@@ -242,7 +270,7 @@ def get_market_cap(ticker: str) -> Optional[float]:
 def get_current_pbr(ticker: str) -> Optional[float]:
     """현재 PBR"""
     try:
-        today = datetime.today().strftime("%Y%m%d")
+        today = _last_trading_date()
         market = _guess_market(ticker)
         df = stock.get_market_fundamental_by_ticker(today, market)
         if df is None or ticker not in df.index:
@@ -264,7 +292,7 @@ def get_all_tickers(min_cap_억: float = 500) -> list[dict]:
         [{"ticker": "005930", "name": "삼성전자", "market": "KOSPI",
           "market_cap": 3000000, "sector": "전기전자"}, ...]
     """
-    today = datetime.today().strftime("%Y%m%d")
+    today = _last_trading_date()
     result = []
 
     for market in ("KOSPI", "KOSDAQ"):
