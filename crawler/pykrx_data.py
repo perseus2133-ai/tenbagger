@@ -42,23 +42,34 @@ def _trading_window(days_back: int) -> tuple[str, str]:
 _cached_trading_date = None
 
 
-def _last_trading_date():
-    """가장 최근 거래일 날짜 반환 (주말/공휴일 자동 처리)"""
+def _last_trading_date() -> str:
+    """가장 최근 거래일 날짜 반환 (주말/공휴일 자동 처리)
+
+    삼성전자(005930) OHLCV 범위 조회를 통해 실제 거래가 있었던
+    가장 최근 날짜를 탐색합니다. 단일 날짜 조회보다 안정적입니다.
+    """
     global _cached_trading_date
     if _cached_trading_date:
         return _cached_trading_date
-    d = datetime.today()
-    for _ in range(10):
-        if d.weekday() < 5:
-            candidate = d.strftime("%Y%m%d")
-            try:
-                df = stock.get_market_cap_by_ticker(candidate, "KOSPI")
-                if df is not None and not df.empty:
-                    _cached_trading_date = candidate
-                    return candidate
-            except Exception:
-                pass
-        d -= timedelta(days=1)
+
+    end = datetime.today()
+    start = end - timedelta(days=14)  # 2주 범위로 최근 거래일 탐색
+
+    try:
+        df = stock.get_market_ohlcv_by_date(
+            start.strftime("%Y%m%d"),
+            end.strftime("%Y%m%d"),
+            "005930",  # 삼성전자 (항상 존재하는 기준 종목)
+        )
+        if df is not None and not df.empty and "거래량" in df.columns:
+            trading = df[df["거래량"] > 0]
+            if not trading.empty:
+                _cached_trading_date = trading.index[-1].strftime("%Y%m%d")
+                return _cached_trading_date
+    except Exception:
+        pass
+
+    # 폴백: 가장 최근 평일
     d = datetime.today()
     while d.weekday() >= 5:
         d -= timedelta(days=1)
