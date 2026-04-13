@@ -296,6 +296,17 @@ def get_current_pbr(ticker: str) -> Optional[float]:
 # 전체 종목 리스트 (시총 필터)
 # ──────────────────────────────────────────────
 
+def _fetch_cap_df(date_str: str, market: str):
+    """시가총액 DataFrame 조회. 실패하면 None 반환."""
+    try:
+        df = stock.get_market_cap_by_ticker(date_str, market)
+        if df is not None and not df.empty and "시가총액" in df.columns:
+            return df
+        return None
+    except Exception:
+        return None
+
+
 def get_all_tickers(min_cap_억: float = 500) -> list[dict]:
     """KOSPI+KOSDAQ 시총 min_cap_억 억원 이상 종목 반환
 
@@ -306,10 +317,28 @@ def get_all_tickers(min_cap_억: float = 500) -> list[dict]:
     today = _last_trading_date()
     result = []
 
+    # get_market_cap_by_ticker 는 장 개시 전/주말에 실패할 수 있으므로
+    # 최근 5 평일을 역순으로 시도
+    def _find_valid_date(market: str) -> tuple:
+        """유효한 날짜와 cap_df 반환"""
+        d = datetime.strptime(today, "%Y%m%d")
+        for _ in range(7):
+            ds = d.strftime("%Y%m%d")
+            if d.weekday() < 5:
+                cap = _fetch_cap_df(ds, market)
+                if cap is not None:
+                    return ds, cap
+            d -= timedelta(days=1)
+        return today, None
+
     for market in ("KOSPI", "KOSDAQ"):
         try:
-            cap_df  = stock.get_market_cap_by_ticker(today, market)
-            fund_df = stock.get_market_fundamental_by_ticker(today, market)
+            use_date, cap_df = _find_valid_date(market)
+            fund_df = None
+            try:
+                fund_df = stock.get_market_fundamental_by_ticker(use_date, market)
+            except Exception:
+                pass
 
             if cap_df is None or cap_df.empty:
                 continue
@@ -326,7 +355,7 @@ def get_all_tickers(min_cap_억: float = 500) -> list[dict]:
 
             # 업종
             try:
-                sector_df = stock.get_market_sector_classifications(today, market)
+                sector_df = stock.get_market_sector_classifications(use_date, market)
             except Exception:
                 sector_df = None
 
